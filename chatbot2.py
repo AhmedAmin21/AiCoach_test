@@ -1,5 +1,4 @@
 from langchain.tools import StructuredTool
-from langchain.chains import LLMChain
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -11,25 +10,27 @@ from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain.callbacks import StreamlitCallbackHandler
-
-
-
+from deep_translator import GoogleTranslator
 
 load_dotenv()
 
 api_key = os.getenv('GROQ_API_KEY')
 ninga_api_key = os.getenv('NINGA_API_KEY')
 
-# API URL for nutrition lookup
 api_url = 'https://api.calorieninjas.com/v1/nutrition?query='
 
-# Function to fetch nutrition data
+def translate_text(text, target_lang):
+    return GoogleTranslator(source='auto', target=target_lang).translate(text)
+
+def detect_language(text):
+    return GoogleTranslator(source='auto', target='en').translate(text) != text
+
 def Ninga(query: str):
     response = requests.get(api_url + query, headers={'X-Api-Key': ninga_api_key})
     if response.status_code == 200:
         data = response.json()
         if "items" in data and len(data["items"]) > 0:
-            item = data["items"][0]  # Get first food item
+            item = data["items"][0]
             return {
                 "name": item.get("name", "Unknown"),
                 "serving_size": item.get("serving_size_g", "N/A"),
@@ -43,7 +44,6 @@ def Ninga(query: str):
     else:
         return f"API request failed with status code {response.status_code}"
 
-# Create nutrition tool
 api_calling_tool = StructuredTool.from_function(
     func=Ninga,
     name='Ninga',
@@ -52,10 +52,8 @@ api_calling_tool = StructuredTool.from_function(
 
 tools = [api_calling_tool]
 
-# LLM for nutrition agent
 llm_nutrition = ChatGroq(api_key=api_key, model_name='gemma2-9b-it')
 
-# Prompt for nutrition agent
 nutrition_prompt = ChatPromptTemplate.from_messages([
     ('system', 
       """You are a nutritionist and you have two primary goals:
@@ -75,19 +73,18 @@ nutrition_prompt = ChatPromptTemplate.from_messages([
     ("placeholder", "{agent_scratchpad}")
 ])
 
-# Create tool agent for nutrition lookup
 tool_agent = create_tool_calling_agent(llm_nutrition, tools, nutrition_prompt)
 agent_ex = AgentExecutor(agent=tool_agent, tools=tools, verbose=True)
 
+llm_chatbot = ChatNVIDIA(model="meta/llama-3.3-70b-instruct", api_key="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")
 
-#llm = ChatGroq(model='gemma2-9b-it', api_key=api_key)
-llm_chatbot = ChatNVIDIA( model="meta/llama-3.3-70b-instruct",
-  api_key="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")
-
-template = """you are a fitness coach with a 10 years experaince, you have an expert knowledge in both nutrition and gym training, 
-you have knowledge in human anatomy , you know every body parts and how to target them in weight lifting training.
-your goal is to answer user fitness/nutrition question correctly with a nice and easy way to understand and keep the answer short but containes the most important parts.
-if you get an input as a nutrition facts take the info and provide it to user to help him understand the food he is eating.
+template = """You are a fitness coach with 10 years of experience. You are an expert in both nutrition and gym training.
+You also have knowledge of human anatomy, body parts, and how to target them in weightlifting training.
+You can answer fitness/nutrition questions in **both Arabic and English**.  
+**Important Rules:**
+- Always reply in the **same language** as the user's question.
+- If the question is related to nutrition, extract and explain the nutritional data.
+- Keep responses **concise yet informative**.
 question:
 {question}"""
 
@@ -98,9 +95,7 @@ prompt_template = PromptTemplate(
 
 sop = StrOutputParser()
 fitness_chain = prompt_template | llm_chatbot | sop
-# -----------------------------------------------
 
-# Streamlit UI
 st.title('Fitness & Nutrition Chatbot')
 
 if 'messages' not in st.session_state:
@@ -108,21 +103,19 @@ if 'messages' not in st.session_state:
         {'role': 'assistant', 'content': "Hi! I'm a fitness coach. I can answer gym or nutrition questions."}
     ]
 
-# write the message to user
 for msg in st.session_state.messages:
     st.chat_message(msg['role']).write(msg['content'])
 
-# 1 prompt = text input its place holder is 'What is machine learning?'
-if user_prompt:=st.chat_input(placeholder='what is the right number of sets should i play for a {spacific training} '):
-    st.session_state.messages.append({'role':'user', 'content':user_prompt})
+if user_prompt := st.chat_input(placeholder='What is the right number of sets should I play for a {specific training}?'):
+    st.session_state.messages.append({'role': 'user', 'content': user_prompt})
     st.chat_message("user").write(user_prompt)
 
+    user_lang = 'ar' if detect_language(user_prompt) else 'en'
+    translated_prompt = translate_text(user_prompt, 'en') if user_lang == 'ar' else user_prompt
 
     with st.chat_message('assistant'):
-        # here we show how agent think before giving the last answer
         st_cb = StreamlitCallbackHandler(st.container(), expand_new_thoughts=False)
 
-    # Check if the question is related to nutrition
     nutrition_keywords = {
     "calories", "protein", "fat", "sugar", "nutrition", "food", "diet",
     "rice", "wheat", "oats", "corn", "barley", "quinoa", "millet", "rye",
@@ -143,17 +136,21 @@ if user_prompt:=st.chat_input(placeholder='what is the right number of sets shou
     "basil", "cilantro", "parsley", "garlic", "onion", "ginger",
     "black pepper", "cumin", "paprika", "turmeric", "cinnamon", "cloves",
     "sugar", "brown sugar", "honey", "maple syrup", "molasses",
-    "water", "tea", "coffee", "orange juice"
+    "tea", "coffee", "orange juice"
     }
 
-    # Convert user input to lowercase
-    user_prompt_lower = user_prompt.lower()
-    if any(keyword in user_prompt_lower for keyword in nutrition_keywords):
-        answer_ = agent_ex.invoke({'input': user_prompt})
-        #nutrition_answer = answer_.get('output', 'Sorry, I could not find nutrition information.')
-        answer = fitness_chain.invoke({'question':answer_['output']})
-    else:
-        answer = fitness_chain.invoke({'question': user_prompt})
+    user_prompt_lower = translated_prompt.lower()
 
-    st.session_state.messages.append({'role': 'assistant', 'content': answer})
-    st.write(answer)
+    if any(keyword in user_prompt_lower for keyword in nutrition_keywords):
+        answer_ = agent_ex.invoke({'input': translated_prompt})
+        answer = fitness_chain.invoke({'question': answer_['output']})
+    else:
+        answer = fitness_chain.invoke({'question': translated_prompt})
+
+    final_answer = translate_text(answer, 'ar') if user_lang == 'ar' else answer
+    st.session_state.messages.append({'role': 'assistant', 'content': final_answer})
+    if user_lang == 'ar':
+        st.markdown(f'<div dir="rtl" style="text-align: right;">{final_answer}</div>', unsafe_allow_html=True)
+    else:
+        st.write(final_answer)
+    #st.write(final_answer)
